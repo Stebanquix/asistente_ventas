@@ -1,124 +1,148 @@
 import os
-import sys
+import json
 import requests
-from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel
+from fastapi import FastAPI, Request, Response, HTTPException
 from google import genai
 from google.genai import types
 
-# 1. Configuración de Credenciales desde el entorno de Render
-API_KEY_SEGURA = os.getenv("GEMINI_API_KEY")
-WALINK_ESTABLECIDO = "https://wa.link"
-# Token que usted inventará en Meta (Ejemplo: "PistasPro2026")
-WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "PistasPro2026")
-# Token de acceso permanente que le dará Meta para enviar mensajes
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+# ------------------------------------------------------------------------------
+# 1. CONFIGURACIÓN Y VARIABLES DE ENTORNO
+# ------------------------------------------------------------------------------
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "PistasPro2026")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")  # Token de acceso de Meta
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")  # Phone Number ID de WhatsApp
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-try:
-    print("🔄 Conectando con los servicios de Google GenAI...")
-    client = genai.Client()
-    print("✅ Conexión con Gemini establecida con éxito.")
-except Exception as e:
-    print(f"⚠️ Alerta de inicialización de IA: {str(e)}")
+# Inicialización del cliente oficial de Google GenAI
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 2. Inicialización del Servidor FastAPI
-app = FastAPI(title="API Oficial de WhatsApp - Pistas Profesionales")
+app = FastAPI(title="Chatbot Pistas Musicales Colombia")
 
-# Prompt del Sistema Corporativo Nacional
-PROMPT_SISTEMA = f"""
-Eres el asesor virtual oficial de la plataforma "Pistas Instrumentales Profesionales" (Studio Backing Tracks). 
-Tu objetivo es atender de manera profesional y corporativa a los clientes de toda Colombia que se comunican por WhatsApp interesados en adquirir instrumentales de alta fidelidad para cualquier género musical.
+# Prompt del sistema para el asistente comercial
+SYSTEM_INSTRUCTION = """
+Eres un asistente comercial automatizado, servicial y profesional para un negocio de pistas musicales instrumentales en Colombia.
+Tu tono es ultra-neutral, cortés y claro.
 
-REGLAS ESTRICTAS DE COMPORTAMIENTO:
-1. TONO EMPRESARIAL Y NEUTRO: Utilice un lenguaje profesional, formal y cortés. Evite por completo jergas regionales. Diríjase al usuario como "artista", "cliente" o de "usted".
-2. MULTI-GÉNERO: Confirme que procesa cualquier estilo bajo el estándar "Official Backing Track". Si el tema es inconseguible, ofrezca agendarlo como "Pedido Personalizado de Estudio".
-3. TARIFAS: Formato MP3 $20.000 COP / Formato WAV $30.000 COP.
-4. COMBOS: Ofrécele el "Combo Pro de Lanzamiento: Pack de 3 pistas en MP3" por $45.000 COP si manifiesta dudas.
-5. REGATEO: Si insiste demasiado, puede dejar el MP3 a $15.000 COP como apoyo al artista independiente. El WAV no se rebaja.
-6. PAGO: Transferencia a Nequi o Daviplata. Al enviar el comprobante, se libera su descarga de Google Drive.
-7. CIERRE: Concluya siempre entregando el siguiente enlace de contacto oficial: {WALINK_ESTABLECIDO}
+TARIFA Y PRODUCTOS:
+- Pistas instrumentales en formato MP3: $20.000 COP cada una.
+- Pistas instrumentales en formato WAV: $30.000 COP cada una.
+
+DESCUENTOS Y COMBOS (Manejo controlado de precios):
+- Si el cliente compra 3 o más pistas en MP3, el precio baja a $15.000 COP por unidad.
+- Si el cliente compra 3 o más pistas en WAV, el precio baja a $25.000 COP por unidad.
+- Para pedidos personalizados o negociaciones especiales, mantén la cordialidad y redirige al cierre de venta.
+
+ENLACE DE CONTACTO Y PAGO:
+Cuando el cliente confirme su pedido o solicite hablar con un asesor/realizar el pago, comparte el siguiente enlace directo de WhatsApp:
+https://wa.link
+
+Instrucciones de respuesta:
+- Sé conciso, amable y directo.
+- Responde siempre con los precios en pesos colombianos ($ COP).
 """
 
-# --- WEBHOOK PARA LA API OFICIAL DE META ---
-
+# ------------------------------------------------------------------------------
+# 2. ENDPOINT DE VERIFICACIÓN DEL WEBHOOK (GET)
+# ------------------------------------------------------------------------------
 @app.get("/webhook")
-def verificar_webhook_meta(request: Request):
+async def verify_webhook(request: Request):
     """
-    Este endpoint es de uso exclusivo para que Meta valide que su servidor
-    es seguro y real cuando lo configure en el panel de desarrolladores.
+    Endpoint requerido por Meta para validar la Callback URL.
+    Debe devolver obligatoriamente el parámetro 'hub.challenge' en texto plano (plain text).
     """
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
-    
+
     if mode and token:
-        if mode == "subscribe" and token == WHATSAPP_VERIFY_TOKEN:
-            print("✅ Webhook de Meta verificado y enlazado correctamente.")
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            # Retorno en texto plano exigido por Meta
             return Response(content=challenge, media_type="text/plain")
         else:
             raise HTTPException(status_code=403, detail="Token de verificación inválido")
-    return "Servidor activo esperando validación de Meta."
+            
+    raise HTTPException(status_code=400, detail="Parámetros faltantes")
 
+# ------------------------------------------------------------------------------
+# 3. ENDPOINT DE PROCESAMIENTO DE MENSAJES (POST)
+# ------------------------------------------------------------------------------
 @app.post("/webhook")
-async def recibir_mensaje_meta(request: Request):
+async def receive_message(request: Request):
     """
-    Este endpoint recibe las notificaciones en tiempo real de Meta, procesa
-    el texto con Gemini y responde al cliente directamente a su celular.
+    Recibe los eventos enviados por Meta cuando un usuario escribe por WhatsApp.
     """
-    body = await request.json()
-    
-    try:
-        # Validamos que sea un mensaje de texto válido enviado por un usuario
-        if "object" in body and body["object"] == "whatsapp_business_account":
-            for entry in body.get("entry", []):
-                for change in entry.get("changes", []):
-                    value = change.get("value", {})
-                    messages = value.get("messages", [])
-                    
-                    if messages:
-                        message = messages[0]
-                        phone_number_id = value.get("metadata", {}).get("phone_number_id")
-                        from_number = message.get("from") # Teléfono del cliente
-                        
-                        # Filtramos estrictamente mensajes de texto limpio
-                        if message.get("type") == "text":
-                            texto_cliente = message.get("text", {}).get("body")
-                            
-                            # Llamamos a la Inteligencia Artificial de Gemini
-                            response = client.models.generate_content(
-                                model='gemini-3.8-flash',
-                                contents=texto_cliente,
-                                config=types.GenerateContentConfig(
-                                    system_instruction=PROMPT_SISTEMA,
-                                    temperature=0.3,
-                                )
-                            )
-                            respuesta_bot = response.text.strip()
-                            
-                            # Enviamos la respuesta de vuelta usando la API Oficial de Meta
-                            url_meta = f"https://facebook.com{phone_number_id}/messages"
-                            headers_meta = {
-                                "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-                                "Content-Type": "application/json"
-                            }
-                            payload_meta = {
-                                "messaging_product": "whatsapp",
-                                "to": from_number,
-                                "type": "text",
-                                "text": {"body": respuesta_bot}
-                            }
-                            
-                            # Despachamos el mensaje a internet de forma nativa
-                            requests.post(url_meta, json=payload_meta, headers=headers_meta)
-                            
-            return {"status": "success"}
-    except Exception as e:
-        print(f"❌ Error al procesar datos de Meta: {str(e)}")
-        return {"status": "error", "details": str(e)}
-        
-    return {"status": "ignored"}
+    data = await request.json()
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    try:
+        # Extraer estructura del mensaje entrante de la API Graph
+        entry = data.get("entry", [])[0]
+        changes = entry.get("changes", [])[0]
+        value = changes.get("value", {})
+        messages = value.get("messages", [])
+
+        if messages:
+            message = messages[0]
+            from_number = message.get("from")  # Número del cliente
+            msg_type = message.get("type")
+
+            # Procesar mensajes de texto
+            if msg_type == "text":
+                user_text = message.get("text", {}).get("body", "")
+
+                # Generar respuesta con Gemini 2.5 Flash / 3.8 Flash
+                bot_response = generate_gemini_response(user_text)
+
+                # Enviar respuesta al usuario vía WhatsApp Cloud API
+                send_whatsapp_message(from_number, bot_response)
+
+    except Exception as e:
+        print(f"Error procesando mensaje entrante: {e}")
+
+    # Meta exige un código HTTP 200 OK para confirmar la recepción
+    return Response(content="EVENT_RECEIVED", status_code=200)
+
+# ------------------------------------------------------------------------------
+# 4. FUNCIONES AUXILIARES (Gemini & WhatsApp API)
+# ------------------------------------------------------------------------------
+def generate_gemini_response(prompt_text: str) -> str:
+    """ Genera la respuesta utilizando Gemini mediante el SDK google-genai """
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt_text,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.3,
+            )
+        )
+        return response.text
+    except Exception as e:
+        print(f"Error llamando a la API de Gemini: {e}")
+        return "Hola, en este momento estoy teniendo un inconveniente técnico. Por favor escríbenos directamente aquí para atenderte: https://wa.link"
+
+
+def send_whatsapp_message(to_number: str, text: str):
+    """ Envía la respuesta generada al cliente a través de la API Graph de Meta """
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        print("Faltan las variables WHATSAPP_TOKEN o PHONE_NUMBER_ID en el entorno.")
+        return
+
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"body": text}
+    }
+
+    try:
+        res = requests.post(url, json=payload, headers=headers)
+        if res.status_code != 200:
+            print(f"Error enviando mensaje a WhatsApp: {res.status_code} - {res.text}")
+    except Exception as e:
+        print(f"Excepción en envío de mensaje a WhatsApp: {e}")
