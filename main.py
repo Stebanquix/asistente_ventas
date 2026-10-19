@@ -1,13 +1,12 @@
 import os
 import sys
 import requests
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
-# 1. Configuración Segura de Credenciales (Render Environment)
+# 1. Configuración Segura de Credenciales (Render)
 API_KEY_SEGURA = os.getenv("GEMINI_API_KEY")
 WALINK_ESTABLECIDO = "https://wa.link"
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
@@ -28,13 +27,14 @@ Tu objetivo es atender de manera profesional y corporativa a los clientes de tod
 Tarifas: MP3 $20.000 COP / WAV $30.000 COP. Enlace de contacto: {WALINK_ESTABLECIDO}
 """
 
-# --- WEBHOOK PARA LA API OFICIAL DE META ---
+# --- WEBHOOK PARA LA API OFICIAL DE META (REENTRADA EN TEXTO PURO) ---
 
-@app.get("/webhook", response_class=PlainTextResponse)
+@app.get("/webhook")
 def verificar_webhook_meta(request: Request):
     """
-    Este es el método GET que Meta necesita de forma obligatoria.
-    Responderá de forma inmediata al token 'PistasPro2026'.
+    Este método GET responde al protocolo estricto de Meta.
+    Usa 'Response' con media_type='text/plain' para enviar el reto
+    sin comillas tipográficas ni formatos JSON corruptos.
     """
     params = request.query_params
     mode = params.get("hub.mode")
@@ -42,10 +42,11 @@ def verificar_webhook_meta(request: Request):
     challenge = params.get("hub.challenge")
     
     if mode == "subscribe" and token == "PistasPro2026":
-        print("✅ Webhook de Meta verificado con éxito.")
-        return challenge
+        print("✅ Webhook de Meta verificado y enlazado con éxito rotundo.")
+        # Retornamos el challenge en su estado más puro y crudo
+        return Response(content=challenge, media_type="text/plain")
         
-    return "Servidor de Pistas Activo y Listo para Meta."
+    return Response(content="Servidor de Pistas Activo y Listo para Meta.", media_type="text/plain")
 
 @app.post("/webhook")
 async def recibir_mensaje_meta(request: Request):
@@ -57,13 +58,12 @@ async def recibir_mensaje_meta(request: Request):
                     value = change.get("value", {})
                     messages = value.get("messages", [])
                     if messages:
-                        message = messages[0]
+                        message = messages
                         phone_number_id = value.get("metadata", {}).get("phone_number_id")
                         from_number = message.get("from")
                         if message.get("type") == "text":
                             texto_cliente = message.get("text", {}).get("body")
                             
-                            # Generación con Gemini
                             response = client.models.generate_content(
                                 model='gemini-3.8-flash',
                                 contents=texto_cliente,
@@ -74,7 +74,6 @@ async def recibir_mensaje_meta(request: Request):
                             )
                             respuesta_bot = response.text.strip()
                             
-                            # Envío de vuelta a Meta
                             url_meta = f"https://facebook.com{phone_number_id}/messages"
                             headers_meta = {
                                 "Authorization": f"Bearer {WHATSAPP_TOKEN}",
