@@ -1,24 +1,22 @@
 import os
 import sys
 import requests
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
-# 1. Configuración Segura de Credenciales (Lectura desde el entorno invisible de Render)
-# El backend queda limpio. GitHub ya no arrojará alertas porque no hay texto plano expuesto.
+# 1. Configuración Segura de Credenciales (Variables de entorno de Render)
 API_KEY_SEGURA = os.getenv("GEMINI_API_KEY")
 WALINK_ESTABLECIDO = "https://wa.link"
-WHATSAPP_VERIFY_TOKEN = "PistasPro2026"
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 
 if not API_KEY_SEGURA:
-    print("❌ Alerta: No se detectó la variable GEMINI_API_KEY en el servidor de producción.")
+    print("❌ Alerta de producción: Configure la variable GEMINI_API_KEY en el panel de Render.")
 
 try:
-    print("🔄 Conectando con los servicios de Google GenAI...")
-    # Inicializa el cliente de forma nativa leyendo el entorno de la nube
+    print("🔄 Estableciendo conexión con Google GenAI...")
     client = genai.Client()
     print("✅ Conexión con Gemini establecida con éxito.")
 except Exception as e:
@@ -27,7 +25,7 @@ except Exception as e:
 # 2. Inicialización del Servidor FastAPI
 app = FastAPI(title="API Oficial de WhatsApp - Pistas Profesionales")
 
-# Prompt del Sistema Corporativo Nacional
+# Prompt del Sistema Corporativo Nacional (Tono Neutral de Ventas)
 PROMPT_SISTEMA = f"""
 Eres el asesor virtual oficial de la plataforma "Pistas Instrumentales Profesionales" (Studio Backing Tracks). 
 Tu objetivo es atender de manera profesional y corporativa a los clientes de toda Colombia que se comunican por WhatsApp interesados en adquirir instrumentales de alta fidelidad para cualquier género musical.
@@ -42,27 +40,33 @@ REGLAS ESTRICTAS DE COMPORTAMIENTO:
 7. CIERRE: Concluya siempre entregando el siguiente enlace de contacto oficial: {WALINK_ESTABLECIDO}
 """
 
-# --- WEBHOOK PARA LA API OFICIAL DE META (OPTIMIZADO ULTRA RÁPIDO) ---
+# --- WEBHOOK PARA LA API OFICIAL DE META (VALIDACIÓN NATIVA ULTRA RÁPIDA) ---
 
-@app.get("/webhook")
+@app.get("/webhook", response_class=PlainTextResponse)
 def verificar_webhook_meta(request: Request):
     """
-    Endpoint optimizado para responder de forma inmediata a Meta, 
-    evitando caídas por el tiempo de arranque de Render.
+    Endpoint nativo modificado con PlainTextResponse. Retorna el 'challenge'
+    de forma directa y ultra rápida como texto plano sin decoradores adicionales,
+    cumpliendo estrictamente con el protocolo que exige Meta.
     """
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
     
+    # Validamos que el modo sea subscripción y coincida con nuestro token de seguridad
     if mode == "subscribe" and token == "PistasPro2026":
-        print("✅ Webhook de Meta verificado y enlazado correctamente de forma instantánea.")
-        return Response(content=challenge, media_type="text/plain")
+        print("✅ Webhook de Meta verificado y enlazado correctamente.")
+        return challenge
         
-    return Response(content="Servidor de Pistas Activo y Listo para Meta.", media_type="text/plain")
+    return "Servidor de Pistas Activo y Listo para Meta."
 
 @app.post("/webhook")
 async def recibir_mensaje_meta(request: Request):
+    """
+    Recibe las notificaciones de mensajes entrantes desde los servidores de Meta,
+    procesa el texto con Gemini 3.8-Flash y responde de forma automática.
+    """
     body = await request.json()
     
     try:
@@ -73,14 +77,14 @@ async def recibir_mensaje_meta(request: Request):
                     messages = value.get("messages", [])
                     
                     if messages:
-                        message = messages
+                        message = messages[0]
                         phone_number_id = value.get("metadata", {}).get("phone_number_id")
                         from_number = message.get("from")
                         
                         if message.get("type") == "text":
                             texto_cliente = message.get("text", {}).get("body")
                             
-                            # Llamada a Gemini 3.8-Flash
+                            # Llamada a la Inteligencia Artificial
                             response = client.models.generate_content(
                                 model='gemini-3.8-flash',
                                 contents=texto_cliente,
@@ -91,7 +95,7 @@ async def recibir_mensaje_meta(request: Request):
                             )
                             respuesta_bot = response.text.strip()
                             
-                            # Petición HTTP oficial de vuelta a Meta
+                            # Petición HTTP oficial de respuesta a Meta
                             url_meta = f"https://facebook.com{phone_number_id}/messages"
                             headers_meta = {
                                 "Authorization": f"Bearer {WHATSAPP_TOKEN}",
