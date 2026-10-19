@@ -7,16 +7,13 @@ from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
-# 1. Configuración Segura de Credenciales (Variables de entorno de Render)
+# 1. Configuración Segura de Credenciales (Render Environment)
 API_KEY_SEGURA = os.getenv("GEMINI_API_KEY")
 WALINK_ESTABLECIDO = "https://wa.link"
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 
-if not API_KEY_SEGURA:
-    print("❌ Alerta de producción: Configure la variable GEMINI_API_KEY en el panel de Render.")
-
 try:
-    print("🔄 Estableciendo conexión con Google GenAI...")
+    print("🔄 Conectando con Google GenAI...")
     client = genai.Client()
     print("✅ Conexión con Gemini establecida con éxito.")
 except Exception as e:
@@ -25,66 +22,48 @@ except Exception as e:
 # 2. Inicialización del Servidor FastAPI
 app = FastAPI(title="API Oficial de WhatsApp - Pistas Profesionales")
 
-# Prompt del Sistema Corporativo Nacional (Tono Neutral de Ventas)
 PROMPT_SISTEMA = f"""
-Eres el asesor virtual oficial de la plataforma "Pistas Instrumentales Profesionales" (Studio Backing Tracks). 
-Tu objetivo es atender de manera profesional y corporativa a los clientes de toda Colombia que se comunican por WhatsApp interesados en adquirir instrumentales de alta fidelidad para cualquier género musical.
-
-REGLAS ESTRICTAS DE COMPORTAMIENTO:
-1. TONO EMPRESARIAL Y NEUTRO: Utilice un lenguaje profesional, formal y cortés. Evite por completo jergas regionales. Diríjase al usuario como "artista", "cliente" o de "usted".
-2. MULTI-GÉNERO: Confirme que procesa cualquier estilo bajo el estándar "Official Backing Track". Si el tema es inconseguible, ofrece agendarlo como "Pedido Personalizado de Estudio".
-3. TARIFAS: Formato MP3 $20.000 COP / Formato WAV $30.000 COP.
-4. COMBOS: Ofrécele el "Combo Pro de Lanzamiento: Pack de 3 pistas en MP3" por $45.000 COP si manifiesta dudas.
-5. REGATEO: Si insiste demasiado, puede dejar el MP3 a $15.000 COP como apoyo al artista independiente. El WAV no se rebaja.
-6. PAGO: Transferencia a Nequi o Daviplata. Al enviar el comprobante, se libera su descarga de Google Drive.
-7. CIERRE: Concluya siempre entregando el siguiente enlace de contacto oficial: {WALINK_ESTABLECIDO}
+Eres el asesor virtual oficial de la plataforma "Pistas Instrumentales Profesionales". 
+Tu objetivo es atender de manera profesional y corporativa a los clientes de toda Colombia que se comunican por WhatsApp interesados en adquirir instrumentales de alta fidelidad.
+Tarifas: MP3 $20.000 COP / WAV $30.000 COP. Enlace de contacto: {WALINK_ESTABLECIDO}
 """
 
-# --- WEBHOOK PARA LA API OFICIAL DE META (VALIDACIÓN NATIVA ULTRA RÁPIDA) ---
+# --- WEBHOOK PARA LA API OFICIAL DE META ---
 
 @app.get("/webhook", response_class=PlainTextResponse)
 def verificar_webhook_meta(request: Request):
     """
-    Endpoint nativo modificado con PlainTextResponse. Retorna el 'challenge'
-    de forma directa y ultra rápida como texto plano sin decoradores adicionales,
-    cumpliendo estrictamente con el protocolo que exige Meta.
+    Este es el método GET que Meta necesita de forma obligatoria.
+    Responderá de forma inmediata al token 'PistasPro2026'.
     """
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
     
-    # Validamos que el modo sea subscripción y coincida con nuestro token de seguridad
     if mode == "subscribe" and token == "PistasPro2026":
-        print("✅ Webhook de Meta verificado y enlazado correctamente.")
+        print("✅ Webhook de Meta verificado con éxito.")
         return challenge
         
     return "Servidor de Pistas Activo y Listo para Meta."
 
 @app.post("/webhook")
 async def recibir_mensaje_meta(request: Request):
-    """
-    Recibe las notificaciones de mensajes entrantes desde los servidores de Meta,
-    procesa el texto con Gemini 3.8-Flash y responde de forma automática.
-    """
     body = await request.json()
-    
     try:
         if "object" in body and body["object"] == "whatsapp_business_account":
             for entry in body.get("entry", []):
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
                     messages = value.get("messages", [])
-                    
                     if messages:
                         message = messages[0]
                         phone_number_id = value.get("metadata", {}).get("phone_number_id")
                         from_number = message.get("from")
-                        
                         if message.get("type") == "text":
                             texto_cliente = message.get("text", {}).get("body")
                             
-                            # Llamada a la Inteligencia Artificial
+                            # Generación con Gemini
                             response = client.models.generate_content(
                                 model='gemini-3.8-flash',
                                 contents=texto_cliente,
@@ -95,7 +74,7 @@ async def recibir_mensaje_meta(request: Request):
                             )
                             respuesta_bot = response.text.strip()
                             
-                            # Petición HTTP oficial de respuesta a Meta
+                            # Envío de vuelta a Meta
                             url_meta = f"https://facebook.com{phone_number_id}/messages"
                             headers_meta = {
                                 "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -107,14 +86,10 @@ async def recibir_mensaje_meta(request: Request):
                                 "type": "text",
                                 "text": {"body": respuesta_bot}
                             }
-                            
                             requests.post(url_meta, json=payload_meta, headers=headers_meta)
-                            
             return {"status": "success"}
     except Exception as e:
-        print(f"❌ Error al procesar datos de Meta: {str(e)}")
         return {"status": "error", "details": str(e)}
-        
     return {"status": "ignored"}
 
 if __name__ == "__main__":
