@@ -1,15 +1,13 @@
 import os
-import sys
 import requests
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
-# 1. Configuración Segura de Credenciales (Render)
-API_KEY_SEGURA = os.getenv("GEMINI_API_KEY")
+# 1. Configuración de Entorno Fija
 WALINK_ESTABLECIDO = "https://wa.link"
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 
 try:
     print("🔄 Conectando con Google GenAI...")
@@ -18,7 +16,7 @@ try:
 except Exception as e:
     print(f"⚠️ Alerta de inicialización de IA: {str(e)}")
 
-# 2. Inicialización del Servidor FastAPI
+# 2. Inicialización de FastAPI
 app = FastAPI(title="API Oficial de WhatsApp - Pistas Profesionales")
 
 PROMPT_SISTEMA = f"""
@@ -27,14 +25,14 @@ Tu objetivo es atender de manera profesional y corporativa a los clientes de tod
 Tarifas: MP3 $20.000 COP / WAV $30.000 COP. Enlace de contacto: {WALINK_ESTABLECIDO}
 """
 
-# --- WEBHOOK PARA LA API OFICIAL DE META (REENTRADA EN TEXTO PURO) ---
+# --- WEBHOOK PARA LA API OFICIAL DE META (FORZADO ULTRA RÁPIDO) ---
 
 @app.get("/webhook")
 def verificar_webhook_meta(request: Request):
     """
-    Este método GET responde al protocolo estricto de Meta.
-    Usa 'Response' con media_type='text/plain' para enviar el reto
-    sin comillas tipográficas ni formatos JSON corruptos.
+    Este método GET responde directamente a la señal de prueba de Meta.
+    Validamos la palabra clave fija 'PistasPro2026' y devolvemos el challenge
+    en el formato de texto plano crudo que exige Facebook.
     """
     params = request.query_params
     mode = params.get("hub.mode")
@@ -42,8 +40,7 @@ def verificar_webhook_meta(request: Request):
     challenge = params.get("hub.challenge")
     
     if mode == "subscribe" and token == "PistasPro2026":
-        print("✅ Webhook de Meta verificado y enlazado con éxito rotundo.")
-        # Retornamos el challenge en su estado más puro y crudo
+        print("✅ WEBHOOK DE META VALIDADO CON ÉXITO ABSOLUTO.")
         return Response(content=challenge, media_type="text/plain")
         
     return Response(content="Servidor de Pistas Activo y Listo para Meta.", media_type="text/plain")
